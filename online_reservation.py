@@ -4,6 +4,8 @@ from datetime import datetime
 import re
 from supabase import create_client, Client
 from utils import safe_int, safe_float, get_property_name
+import requests
+from config import STAYFLEXI_API_TOKEN  # Import the API token from config
 
 # Initialize Supabase client
 try:
@@ -97,6 +99,168 @@ def load_online_reservations_from_supabase():
     except Exception as e:
         st.error(f"Error loading online reservations: {e}")
         return []
+
+def fetch_stayflexi_bookings():
+    """Fetch bookings from Stayflexi API."""
+    try:
+        url = "https://api.stayflexi.com/core/api/v1/reservation/navigationGetRoomBookings"
+        headers = {
+            "Authorization": f"Bearer {STAYFLEXI_API_TOKEN}"
+        }
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            # Assuming the response is a list of booking dicts or has a key like 'bookings' or 'data'
+            # Adjust based on actual response structure; for now, assume it's a list
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and 'data' in data:
+                return data['data']
+            else:
+                st.warning("Unexpected API response format.")
+                return []
+        else:
+            st.error(f"API request failed with status {response.status_code}: {response.text}")
+            return []
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching from Stayflexi API: {e}")
+        return []
+
+def process_and_sync_api(bookings_data):
+    """Process the API data and sync to DB. Assumes similar structure to Excel columns."""
+    try:
+        existing_reservations = load_online_reservations_from_supabase()
+        existing_ids = {r["booking_id"] for r in existing_reservations}
+        inserted = 0
+        skipped = 0
+        for booking in bookings_data:
+            # Map API fields to Excel-like keys; adjust keys based on actual API response
+            # Assuming API uses snake_case or similar; you may need to adjust key names
+            row = {
+                "hotel id": booking.get("hotel_id") or booking.get("hotelId"),
+                "hotel name": booking.get("hotel_name") or booking.get("hotelName"),
+                "booking id": booking.get("booking_id") or booking.get("bookingId"),
+                "booking_made_on": booking.get("booking_made_on") or booking.get("bookingMadeOn"),
+                "customer_name": booking.get("customer_name") or booking.get("guest_name") or booking.get("guestName"),
+                "customer_phone": booking.get("customer_phone") or booking.get("guest_phone") or booking.get("guestPhone"),
+                "checkin": booking.get("check_in") or booking.get("checkIn"),
+                "checkout": booking.get("check_out") or booking.get("checkOut"),
+                "pax": booking.get("pax") or f"Adults:{booking.get('adults', 0)},Children:{booking.get('children', 0)},Infant:{booking.get('infants', 0)}",
+                "room ids": booking.get("room_ids") or booking.get("roomId") or booking.get("room_no") or booking.get("roomNo"),
+                "room types": booking.get("room_types") or booking.get("roomType"),
+                "rate_plans": booking.get("rate_plans") or booking.get("ratePlan"),
+                "booking_source": booking.get("booking_source") or booking.get("channel") or "Stayflexi",
+                "segment": booking.get("segment"),
+                "status": booking.get("status") or "Confirmed",  # Default to Confirmed if not specified
+                "booking_amount": booking.get("booking_amount") or booking.get("total_amount"),
+                "Total Payment Made": booking.get("total_payment_made") or booking.get("payment_made"),
+                "balance_due": booking.get("balance_due"),
+                "special_requests": booking.get("special_requests") or booking.get("remarks"),
+                "total_amount_with_services": booking.get("total_amount_with_services"),
+                "ota_gross_amount": booking.get("ota_gross_amount"),
+                "ota_commission": booking.get("ota_commission"),
+                "ota_tax": booking.get("ota_tax"),
+                "ota_net_amount": booking.get("ota_net_amount"),
+                "room_revenue": booking.get("room_revenue"),
+                # Add more mappings as needed based on actual API response
+            }
+            
+            hotel_id = str(safe_int(row.get("hotel id", "")))
+            property_name = get_property_name(hotel_id)
+            if property_name == "Unknown Property":
+                property_name = str(row.get("hotel name", "")).split("-")[0].strip() if row.get("hotel name") else ""
+            booking_id = str(row.get("booking id", ""))
+            if not booking_id:
+                continue  # Skip if no booking_id
+            if booking_id in existing_ids:
+                skipped += 1
+                continue
+            booking_made_on = parse_date(row.get("booking_made_on"))
+            guest_name = truncate_string(row.get("customer_name", ""), 50)
+            guest_phone = truncate_string(row.get("customer_phone", ""), 50)
+            check_in = parse_date(row.get("checkin"))
+            check_out = parse_date(row.get("checkout"))
+            pax_str = str(row.get("pax", ""))
+            no_of_adults, no_of_children, no_of_infant = parse_pax(pax_str)
+            total_pax = no_of_adults + no_of_children + no_of_infant
+            room_no = truncate_string(row.get("room ids", ""), 50)
+            room_type = truncate_string(row.get("room types", ""), 50)
+            rate_plans = truncate_string(row.get("rate_plans", ""), 50)
+            booking_source = truncate_string(row.get("booking_source", ""), 50)
+            segment = truncate_string(row.get("segment", ""), 50)
+            staflexi_status = truncate_string(row.get("status", ""), 50)
+            booking_confirmed_on = None  # Editable, default None
+            booking_amount = safe_float(row.get("booking_amount"))
+            total_payment_made = safe_float(row.get("Total Payment Made"))
+            balance_due = safe_float(row.get("balance_due"))
+            
+            # Set mode_of_booking to booking_source by default (truncated)
+            mode_of_booking = truncate_string(booking_source, 50)
+            
+            # Always set booking_status to Pending by default
+            # Reservation agent will change it if required
+            booking_status = "Pending"
+            
+            # Compute payment_status
+            if total_payment_made >= booking_amount:
+                payment_status = "Fully Paid"
+            elif total_payment_made > 0:
+                payment_status = "Partially Paid"
+            else:
+                payment_status = "Not Paid"
+            remarks = truncate_string(row.get("special_requests", ""), 500)  # Longer limit for remarks
+            submitted_by = ""  # Editable
+            modified_by = ""  # Editable
+            total_amount_with_services = safe_float(row.get("total_amount_with_services"))
+            ota_gross_amount = safe_float(row.get("ota_gross_amount"))
+            ota_commission = safe_float(row.get("ota_commission"))
+            ota_tax = safe_float(row.get("ota_tax"))
+            ota_net_amount = safe_float(row.get("ota_net_amount"))
+            room_revenue = safe_float(row.get("room_revenue"))
+            reservation = {
+                "property": property_name,
+                "booking_id": booking_id,
+                "booking_made_on": str(booking_made_on) if booking_made_on else None,
+                "guest_name": guest_name,
+                "guest_phone": guest_phone,
+                "check_in": str(check_in) if check_in else None,
+                "check_out": str(check_out) if check_out else None,
+                "no_of_adults": no_of_adults,
+                "no_of_children": no_of_children,
+                "no_of_infant": no_of_infant,
+                "total_pax": total_pax,
+                "room_no": room_no,
+                "room_type": room_type,
+                "rate_plans": rate_plans,
+                "booking_source": booking_source,
+                "segment": segment,
+                "staflexi_status": staflexi_status,
+                "booking_confirmed_on": booking_confirmed_on,  # Fixed: lowercase 'c'
+                "booking_amount": booking_amount,
+                "total_payment_made": total_payment_made,
+                "balance_due": balance_due,
+                "mode_of_booking": mode_of_booking,
+                "booking_status": booking_status,
+                "payment_status": payment_status,
+                "remarks": remarks,
+                "submitted_by": submitted_by,
+                "modified_by": modified_by,
+                "total_amount_with_services": total_amount_with_services,
+                "ota_gross_amount": ota_gross_amount,
+                "ota_commission": ota_commission,
+                "ota_tax": ota_tax,
+                "ota_net_amount": ota_net_amount,
+                "room_revenue": room_revenue
+            }
+            if insert_online_reservation(reservation):
+                inserted += 1
+                st.session_state.online_reservations.append(reservation)
+            else:
+                skipped += 1
+        return inserted, skipped
+    except Exception as e:
+        st.error(f"Error processing API data: {e}")
+        return 0, 0
 
 def process_and_sync_excel(uploaded_file):
     """Process the uploaded Excel file and sync to DB."""
@@ -212,7 +376,20 @@ def show_online_reservations():
     if 'online_reservations' not in st.session_state:
         st.session_state.online_reservations = load_online_reservations_from_supabase()
 
-    # Upload and Sync section
+    # API Sync section
+    st.subheader("🔄 Sync from Stayflexi API")
+    if st.button("Sync Bookings from Stayflexi API", use_container_width=True):
+        with st.spinner("Fetching bookings from Stayflexi API and syncing..."):
+            bookings_data = fetch_stayflexi_bookings()
+            if bookings_data:
+                inserted, skipped = process_and_sync_api(bookings_data)
+                st.success(f"✅ Synced successfully! Inserted: {inserted}, Skipped (duplicates): {skipped}")
+                # Reload to reflect changes
+                st.session_state.online_reservations = load_online_reservations_from_supabase()
+            else:
+                st.warning("No new bookings fetched from API.")
+
+    # Upload and Sync section (existing)
     st.subheader("Upload and Sync Excel File")
     uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
     if uploaded_file is not None:
