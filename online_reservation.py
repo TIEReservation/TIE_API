@@ -31,10 +31,10 @@ except:
 PROPERTY_MAPPING = {
     "32470": "Happymates Forest Retreat",  # Confirmed from API
     # Add your other properties after finding their correct hotel IDs:
-    # "XXXXX": "Le Poshe Beach view",
-    # "XXXXX": "La Millionaire Resort",
-    # "XXXXX": "Le Poshe Luxury",
-    # "XXXXX": "Le Poshe Suite",
+    "27719": "Le Poshe Beach view",
+    "31550": "La Millionaire Resort",
+    "27720": "Le Poshe Luxury",
+    "27721": "Le Poshe Suite",
     # "XXXXX": "La Paradise Residency",
     # "XXXXX": "La Paradise Luxury",
     # "XXXXX": "La Villa Heritage",
