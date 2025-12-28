@@ -817,5 +817,6 @@ def show_online_reservations():
             "total_payment_made", "balance_due"
         ]
         st.dataframe(filtered_df[display_columns], use_container_width=True)
-def load_online_r():
-    return load_online_reservations_from_supabase()
+
+    def load_online_r():
+        return load_online_reservations_from_supabase()
