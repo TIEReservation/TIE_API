@@ -30,7 +30,6 @@ except:
 # To find others: Login to each property in Stayflexi and check the hotel_id in URL or API calls
 PROPERTY_MAPPING = {
     "27719": "Le Poshe Beach view",  # Confirmed from API
-    # Add your other properties after finding their correct hotel IDs:
     "31550": "La Millionaire Resort",
     "27720": "Le Poshe Luxury",
     "27721": "Le Poshe Suite",
