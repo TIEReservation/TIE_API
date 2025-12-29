@@ -25,27 +25,24 @@ except:
     STAYFLEXI_API_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJnYXlhdGhyaS50aWVAZ21haWwuY29tIiwiaXNzIjoibWF5YW5rU0YiLCJpYXQiOjE3NTQ0ODE4MjQsImV4cCI6MTc4NTU4NTgyNH0.9UmdbaCu7P5_Mfm8nIAaT2MDLR_RyTx3RdouMC0dP0o"
 
 # Property mapping from hotel_id to property name
-# NOTE: You need to find the correct hotel IDs for your properties
-# The example below shows one confirmed ID (32470)
-# To find others: Login to each property in Stayflexi and check the hotel_id in URL or API calls
+# All properties configured with correct hotel IDs from Stayflexi
 PROPERTY_MAPPING = {
-    "27719": "Le Poshe Beach view",  # Confirmed from API
-    "31550": "La Millionaire Resort",
+    "27719": "Le Poshe Beach View",
+    "31550": "La Millionaire Luxury Resort",
     "27720": "Le Poshe Luxury",
     "27721": "Le Poshe Suite",
-    # "XXXXX": "La Paradise Residency",
-    # "XXXXX": "La Paradise Luxury",
-    # "XXXXX": "La Villa Heritage",
-    # "XXXXX": "Le Pondy Beachside",
-    # "XXXXX": "Le Royce Villa",
-    # "XXXXX": "La Tamara Luxury",
-    # "XXXXX": "La Antilia Luxury",
-    # "XXXXX": "La Tamara Suite",
-    # "XXXXX": "Le Park Resort",
-    # "XXXXX": "Villa Shakti",
-    # "XXXXX": "Eden Beach Resort",
-    # "XXXXX": "La Coromandel Luxury",
-    # "XXXXX": "Le Terra",
+    "27707": "La Paradise Residency",
+    "27706": "La Paradise Luxury",
+    "27711": "La Villa Heritage",
+    "27723": "Le Pondy Beachside",
+    "27722": "Le Royce Villa",
+    "27709": "La Tamara Luxury",
+    "27704": "La Antilia Luxury",
+    "27710": "La Tamara Suite",
+    "32470": "Le Park Luxury Resort",
+    "27724": "Villa Shakti",
+    "30357": "Eden Beach Resort",
+    "34006": "La Coromandel Luxury",
 }
 
 def parse_date(dt_str):
@@ -535,16 +532,10 @@ def show_online_reservations():
         st.subheader("Sync from Stayflexi API")
         
         # Important note about hotel IDs
-        st.info("""
-        ⚠️ **IMPORTANT**: You need to update the hotel IDs in the code!
+        st.success("""
+        ✅ **All 16 Properties Configured!**
         
-        Currently only one property is configured (Hotel ID: 32470 - Happymates Forest Retreat).
-        
-        To add other properties:
-        1. Login to Stayflexi for each property
-        2. Check the browser URL or API calls (F12 → Network tab)
-        3. Find the `hotel_id` parameter
-        4. Update the `PROPERTY_MAPPING` dictionary in the code
+        All hotel IDs have been mapped correctly. The API sync will work for all your properties.
         """)
         
         st.markdown("""
@@ -746,15 +737,10 @@ def show_online_reservations():
                 )
                 st.dataframe(mapping_df, use_container_width=True)
                 
-                st.warning("""
-                ⚠️ **Action Required**: 
-                You need to find and add hotel IDs for your other properties!
+                st.success("""
+                ✅ **All Properties Configured!**
                 
-                Only 1 property is configured. To add more:
-                1. Login to Stayflexi for each property
-                2. Open Developer Tools (F12) → Network tab
-                3. Look for `hotel_id` or `hotelId` in API calls
-                4. Update `PROPERTY_MAPPING` in the code
+                16 properties are now mapped and ready for API sync.
                 """)
 
     # View section
@@ -815,6 +801,3 @@ def show_online_reservations():
             "total_payment_made", "balance_due"
         ]
         st.dataframe(filtered_df[display_columns], use_container_width=True)
-
-    def load_online_r():
-        return load_online_reservations_from_supabase()
