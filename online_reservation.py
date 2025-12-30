@@ -15,7 +15,7 @@ except KeyError as e:
     st.stop()
 
 # Stayflexi API Configuration
-STAYFLEXI_API_BASE_URL = "https://api.stayflexi.com"
+STAYFLEXI_API_BASE_URL = "https://app.stayflexi.com/auth/login"
 STAYFLEXI_EMAIL = "gayathri.tie@gmail.com"
 
 # Try to get token from Streamlit secrets, fallback to hardcoded
