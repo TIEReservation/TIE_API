@@ -15,17 +15,10 @@ except KeyError as e:
     st.stop()
 
 # Stayflexi API Configuration
-STAYFLEXI_API_BASE_URL = "https://app.stayflexi.com/auth/login"
+STAYFLEXI_API_BASE_URL = "https://app.stayflexi.com"
 STAYFLEXI_EMAIL = "gayathri.tie@gmail.com"
 
-# Try to get token from Streamlit secrets, fallback to hardcoded
-try:
-    STAYFLEXI_API_TOKEN = st.secrets.get("stayflexi", {}).get("api_token", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJnYXlhdGhyaS50aWVAZ21haWwuY29tIiwiaXNzIjoibWF5YW5rU0YiLCJpYXQiOjE3NTQ0ODE4MjQsImV4cCI6MTc4NTU4NTgyNH0.9UmdbaCu7P5_Mfm8nIAaT2MDLR_RyTx3RdouMC0dP0o")
-except:
-    STAYFLEXI_API_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJnYXlhdGhyaS50aWVAZ21haWwuY29tIiwiaXNzIjoibWF5YW5rU0YiLCJpYXQiOjE3NTQ0ODE4MjQsImV4cCI6MTc4NTU4NTgyNH0.9UmdbaCu7P5_Mfm8nIAaT2MDLR_RyTx3RdouMC0dP0o"
-
 # Property mapping from hotel_id to property name
-# All properties configured with correct hotel IDs from Stayflexi
 PROPERTY_MAPPING = {
     "27719": "Le Poshe Beach View",
     "31550": "La Millionaire Luxury Resort",
@@ -45,6 +38,68 @@ PROPERTY_MAPPING = {
     "34006": "La Coromandel Luxury",
 }
 
+# ========================================================================
+# TOKEN MANAGEMENT - Store in session state
+# ========================================================================
+def get_current_token():
+    """Get current token from session state or secrets"""
+    if 'stayflexi_api_token' in st.session_state and st.session_state.stayflexi_api_token:
+        return st.session_state.stayflexi_api_token
+    
+    # Try to get from secrets as fallback
+    try:
+        return st.secrets.get("stayflexi", {}).get("api_token", None)
+    except:
+        return None
+
+def set_current_token(token: str):
+    """Save token to session state"""
+    st.session_state.stayflexi_api_token = token
+
+def get_fresh_api_token(email: str, password: str):
+    """Get a fresh API token from Stayflexi login endpoint."""
+    # ✅ FIXED: Correct URL
+    login_url = f"{STAYFLEXI_API_BASE_URL}/auth/login"
+    
+    if not password:
+        return None, "Password is required"
+    
+    try:
+        response = requests.post(
+            login_url,
+            json={"email": email, "password": password},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        # Check response status
+        if response.status_code == 400:
+            return None, "Invalid credentials or bad request"
+        elif response.status_code == 401:
+            return None, "Authentication failed - Invalid email or password"
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract token from response
+        token = data.get("token") or data.get("accessToken") or data.get("access_token")
+        
+        if token:
+            set_current_token(token)
+            return token, None
+        else:
+            return None, "Token not found in response"
+            
+    except requests.exceptions.Timeout:
+        return None, "Request timeout - please try again"
+    except requests.exceptions.RequestException as e:
+        return None, f"Network error: {str(e)}"
+    except Exception as e:
+        return None, f"Unexpected error: {str(e)}"
+
+# ========================================================================
+# HELPER FUNCTIONS
+# ========================================================================
 def parse_date(dt_str):
     """Parse date string with or without time."""
     if not dt_str or pd.isna(dt_str):
@@ -112,6 +167,9 @@ def calculate_payment_status(total_payment: float, booking_amount: float) -> str
     else:
         return "Not Paid"
 
+# ========================================================================
+# DATABASE OPERATIONS
+# ========================================================================
 def insert_online_reservation(reservation):
     """Insert a new online reservation into Supabase."""
     try:
@@ -156,37 +214,18 @@ def get_existing_booking_ids():
         st.error(f"Error fetching existing booking IDs: {e}")
         return set()
 
-def get_fresh_api_token(email: str, password: str = None):
-    """Get a fresh API token from Stayflexi login endpoint."""
-    login_url = f"{STAYFLEXI_API_BASE_URL}/auth/login"
-    
-    if not password:
-        return None
-    
-    try:
-        response = requests.post(
-            login_url,
-            json={"email": email, "password": password},
-            timeout=30
-        )
-        response.raise_for_status()
-        data = response.json()
-        token = data.get("token") or data.get("accessToken")
-        
-        if token:
-            st.session_state.stayflexi_api_token = token
-            return token
-        return None
-    except Exception as e:
-        st.error(f"Failed to get fresh token: {e}")
-        return None
-
-def fetch_stayflexi_bookings(hotel_id: str, from_date: date, to_date: date, api_token: str = None):
+# ========================================================================
+# STAYFLEXI API OPERATIONS
+# ========================================================================
+def fetch_stayflexi_bookings(hotel_id: str, from_date: date, to_date: date):
     """Fetch bookings from Stayflexi API for a specific property and date range."""
     url = f"{STAYFLEXI_API_BASE_URL}/core/api/v1/reservation/navigationGetRoomBookings"
     
-    # Use provided token or fall back to global
-    token = api_token or STAYFLEXI_API_TOKEN
+    # Get current token
+    token = get_current_token()
+    
+    if not token:
+        return {"error": "no_token", "message": "No API token available. Please provide credentials."}
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -209,19 +248,18 @@ def fetch_stayflexi_bookings(hotel_id: str, from_date: date, to_date: date, api_
     try:
         response = requests.post(url, json=payload, headers=headers, params=params, timeout=30)
         
-        # Check for 401 Unauthorized
+        # Check for 401 Unauthorized - token expired
         if response.status_code == 401:
             return {"error": "unauthorized", "message": "API token expired or invalid"}
         
         response.raise_for_status()
         data = response.json()
         
-        # Parse the new API structure
+        # Parse the API structure
         bookings = []
         if isinstance(data, dict) and "allRoomReservations" in data:
             single_room_reservations = data["allRoomReservations"].get("singleRoomReservations", [])
             
-            # Extract all reservations from all rooms
             for room_data in single_room_reservations:
                 room_id = room_data.get("roomId", "")
                 room_type_name = room_data.get("roomTypeName", "")
@@ -232,77 +270,61 @@ def fetch_stayflexi_bookings(hotel_id: str, from_date: date, to_date: date, api_
                     if reservation.get("reservationStatus") == "BLOCKED":
                         continue
                     
-                    # Add room info to reservation
                     reservation["room_id"] = room_id
                     reservation["room_type_name"] = room_type_name
                     bookings.append(reservation)
             
             return bookings
         else:
-            st.warning(f"Unexpected API response structure for hotel {hotel_id}")
             return []
             
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401:
             return {"error": "unauthorized", "message": "API token expired or invalid"}
-        st.warning(f"API Request Failed for hotel {hotel_id}: {e}")
-        return []
+        return {"error": "http_error", "message": str(e)}
     except requests.exceptions.RequestException as e:
-        st.warning(f"API Request Failed for hotel {hotel_id}: {e}")
-        return []
+        return {"error": "request_error", "message": str(e)}
     except Exception as e:
-        st.warning(f"Error fetching bookings for hotel {hotel_id}: {e}")
-        return []
+        return {"error": "unknown", "message": str(e)}
 
 def transform_stayflexi_to_db_format(booking: dict, property_name: str):
     """Transform Stayflexi booking data to match database schema."""
-    # Extract guest information
     guest_name = truncate_string(booking.get("username", ""), 50)
     guest_phone = truncate_string(booking.get("userContact", ""), 50)
     guest_email = booking.get("userEmail", "")
     
-    # Parse dates - format: "28-12-2025 14:00:00"
     check_in = parse_stayflexi_datetime(booking.get("checkin"))
     check_out = parse_stayflexi_datetime(booking.get("checkout"))
     
-    # Room information
     room_no = truncate_string(booking.get("room_id", ""), 50)
     room_type = truncate_string(booking.get("room_type_name", ""), 50)
     
-    # Booking details
     booking_id = truncate_string(booking.get("bookingId", ""), 50)
     reservation_id = booking.get("reservationId", "")
     booking_source = truncate_string(booking.get("bookingSource", ""), 50)
     segment = truncate_string(booking.get("segment", ""), 50)
     staflexi_status = truncate_string(booking.get("reservationStatus", ""), 50)
     
-    # Financial information
     room_price = float(booking.get("roomPrice", 0))
     balance_due = float(booking.get("balanceDue", 0))
     
-    # Calculate payment info
     booking_amount = room_price
     total_payment_made = booking_amount - balance_due if balance_due <= booking_amount else 0
     
-    # Calculate nights
     room_nights = 0
     if check_in and check_out:
         room_nights = (check_out - check_in).days
     
-    # Determine payment status
     payment_status = calculate_payment_status(total_payment_made, booking_amount)
     
-    # Guest count (not in API response, set defaults)
-    no_of_adults = 2  # Default
+    no_of_adults = 2
     no_of_children = 0
     no_of_infant = 0
     total_pax = no_of_adults
     
-    # Additional info
     is_group_booking = booking.get("groupBooking", False)
     locked_status = booking.get("lockedStatus", "")
     
-    # Remarks/Notes
     remarks_parts = []
     if guest_email:
         remarks_parts.append(f"Email: {guest_email}")
@@ -315,13 +337,12 @@ def transform_stayflexi_to_db_format(booking: dict, property_name: str):
     
     remarks = truncate_string(" | ".join(remarks_parts), 500)
     
-    # Determine booking status
     booking_status = "Confirmed" if staflexi_status == "CONFIRMED" else "Pending"
     
     db_record = {
         "property": property_name,
         "booking_id": booking_id,
-        "booking_made_on": None,  # Not available in navigationGetRoomBookings response
+        "booking_made_on": None,
         "guest_name": guest_name,
         "guest_phone": guest_phone,
         "check_in": str(check_in) if check_in else None,
@@ -332,7 +353,7 @@ def transform_stayflexi_to_db_format(booking: dict, property_name: str):
         "total_pax": total_pax,
         "room_no": room_no,
         "room_type": room_type,
-        "rate_plans": "",  # Not in this API response
+        "rate_plans": "",
         "booking_source": booking_source,
         "segment": segment,
         "staflexi_status": staflexi_status,
@@ -362,17 +383,17 @@ def transform_stayflexi_to_db_format(booking: dict, property_name: str):
     
     return db_record
 
-def sync_property_bookings(hotel_id: str, property_name: str, from_date: date, to_date: date, existing_ids: set, api_token: str = None):
-    """Sync bookings for a single property. Returns (inserted, skipped, errors, auth_status)"""
+def sync_property_bookings(hotel_id: str, property_name: str, from_date: date, to_date: date, existing_ids: set):
+    """Sync bookings for a single property. Returns (inserted, skipped, errors, status)"""
     inserted = 0
     skipped = 0
     errors = 0
     
-    api_bookings = fetch_stayflexi_bookings(hotel_id, from_date, to_date, api_token)
+    api_bookings = fetch_stayflexi_bookings(hotel_id, from_date, to_date)
     
-    # Check for authorization error
-    if isinstance(api_bookings, dict) and api_bookings.get("error") == "unauthorized":
-        return inserted, skipped, errors, "unauthorized"
+    # Check for errors
+    if isinstance(api_bookings, dict) and "error" in api_bookings:
+        return inserted, skipped, errors, api_bookings["error"]
     
     if not api_bookings:
         return inserted, skipped, errors, None
@@ -392,7 +413,6 @@ def sync_property_bookings(hotel_id: str, property_name: str, from_date: date, t
                 skipped += 1
                 
         except Exception as e:
-            st.warning(f"Error processing booking: {e}")
             errors += 1
     
     return inserted, skipped, errors, None
@@ -506,6 +526,9 @@ def process_and_sync_excel(uploaded_file):
         st.error(f"Error processing Excel file: {e}")
         return 0, 0
 
+# ========================================================================
+# MAIN UI
+# ========================================================================
 def show_online_reservations():
     """Display online reservations page with upload, API sync, and view."""
     st.title("📥 Online Reservations")
@@ -521,7 +544,7 @@ def show_online_reservations():
         st.subheader("Upload and Sync Excel File")
         uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
         if uploaded_file is not None:
-            if st.button("🔄 Sync Excel to Database", key="sync_excel"):
+            if st.button("📤 Sync Excel to Database", key="sync_excel"):
                 with st.spinner("Processing and syncing..."):
                     inserted, skipped = process_and_sync_excel(uploaded_file)
                     st.success(f"✅ Synced successfully! Inserted: {inserted}, Skipped (duplicates): {skipped}")
@@ -531,68 +554,59 @@ def show_online_reservations():
     with tab2:
         st.subheader("Sync from Stayflexi API")
         
-        # Important note about hotel IDs
-        st.success("""
-        ✅ **All 16 Properties Configured!**
+        # ✅ TOKEN MANAGEMENT SECTION
+        st.markdown("### 🔐 API Token Management")
         
-        All hotel IDs have been mapped correctly. The API sync will work for all your properties.
-        """)
+        current_token = get_current_token()
         
-        st.markdown("""
-        Automatically fetch bookings from Stayflexi API for all properties.
-        All synced bookings will appear in DMS (Daily Management Status).
-        """)
-        
-        # API Token Configuration
-        with st.expander("🔑 API Token Configuration", expanded=False):
-            st.markdown("**Current Token Status:**")
+        if current_token:
+            # Show masked token
+            masked_token = current_token[:20] + "..." + current_token[-10:] if len(current_token) > 30 else current_token
+            st.success(f"✅ Token Active: `{masked_token}`")
             
-            # Check if we need a fresh token
-            need_fresh_token = st.checkbox("Use Fresh Token (if current token expired)", key="use_fresh_token")
-            
-            if need_fresh_token:
-                st.warning("⚠️ Current API token appears to be expired. Please provide credentials to get a new token.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Refresh Token", key="refresh_token_btn"):
+                    st.session_state.show_token_input = True
+                    st.rerun()
+            with col2:
+                if st.button("❌ Clear Token", key="clear_token_btn"):
+                    set_current_token(None)
+                    st.success("Token cleared")
+                    st.rerun()
+        else:
+            st.warning("⚠️ No API token available. Please provide credentials to get a token.")
+            st.session_state.show_token_input = True
+        
+        # Token input form
+        if st.session_state.get('show_token_input', False) or not current_token:
+            with st.form("token_form"):
+                st.markdown("**Enter Stayflexi Credentials:**")
                 col1, col2 = st.columns(2)
                 with col1:
-                    fresh_email = st.text_input("Stayflexi Email", value=STAYFLEXI_EMAIL, key="fresh_email")
+                    email_input = st.text_input("Email", value=STAYFLEXI_EMAIL)
                 with col2:
-                    fresh_password = st.text_input("Stayflexi Password", type="password", key="fresh_password")
+                    password_input = st.text_input("Password", type="password")
                 
-                if st.button("🔄 Get Fresh Token", key="get_fresh_token"):
-                    if fresh_email and fresh_password:
-                        with st.spinner("Getting fresh API token..."):
-                            new_token = get_fresh_api_token(fresh_email, fresh_password)
-                            if new_token:
-                                st.success("✅ Fresh token obtained successfully!")
-                                st.info("💡 Token will be used for this session. Consider updating your secrets for permanent use.")
+                submit_token = st.form_submit_button("🔓 Get API Token")
+                
+                if submit_token:
+                    if email_input and password_input:
+                        with st.spinner("Getting API token..."):
+                            token, error = get_fresh_api_token(email_input, password_input)
+                            if token:
+                                st.success("✅ Token obtained successfully!")
+                                st.session_state.show_token_input = False
+                                st.rerun()
                             else:
-                                st.error("❌ Failed to get fresh token. Please check your credentials.")
+                                st.error(f"❌ Failed: {error}")
                     else:
-                        st.error("Please provide both email and password.")
-            else:
-                st.info("Using configured API token from secrets/config.")
-            
-            # Instructions for getting token from browser
-            with st.expander("📖 How to Get Token from Browser"):
-                st.markdown("""
-                ### Steps to Extract Token from Browser:
-                
-                1. **Login to Stayflexi** (app.stayflexi.com)
-                2. **Open Developer Tools** (Press F12)
-                3. **Go to Network tab**
-                4. **Filter** by typing: `api.stayflexi.com`
-                5. **Look for POST requests** (not OPTIONS)
-                6. **Click on a request** (e.g., navigationGetRoomBookings)
-                7. **Find "Request Headers"** section
-                8. **Look for**: `authorization: Bearer eyJhbGc...`
-                9. **Copy the token** (everything after "Bearer ")
-                
-                The token is a very long string that looks like:
-                ```
-                eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJnYXlhdGhyaS50aWVAZ21haWwuY29tIiwiaXNzIjoibWF5YW5rU0YiLCJpYXQiOjE3MzU0MDE2MDAsImV4cCI6MTc4NTU4NTgyNH0.abc123...
-                ```
-                """)
+                        st.error("Please provide both email and password")
         
+        st.markdown("---")
+        
+        # Date range selection
+        st.markdown("### 📅 Select Date Range")
         col1, col2 = st.columns(2)
         with col1:
             from_date = st.date_input(
@@ -623,125 +637,134 @@ def show_online_reservations():
                     key="select_props"
                 )
             
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if st.button("🔄 Sync from API", use_container_width=True, type="primary", key="sync_api"):
-                    if not sync_all and not selected_properties:
-                        st.error("Please select at least one property to sync")
-                    else:
-                        # Get the API token to use
-                        current_token = st.session_state.get('stayflexi_api_token', STAYFLEXI_API_TOKEN)
+            if st.button("🔄 Sync from API", use_container_width=True, type="primary", key="sync_api"):
+                # Check if we have a token
+                if not get_current_token():
+                    st.error("❌ No API token available. Please provide credentials above.")
+                elif not sync_all and not selected_properties:
+                    st.error("Please select at least one property to sync")
+                else:
+                    with st.spinner("Syncing bookings from Stayflexi API..."):
+                        existing_ids = get_existing_booking_ids()
                         
-                        with st.spinner("Syncing bookings from Stayflexi API..."):
-                            existing_ids = get_existing_booking_ids()
+                        total_inserted = 0
+                        total_skipped = 0
+                        total_errors = 0
+                        property_results = {}
+                        auth_error = False
+                        no_token_error = False
+                        
+                        if sync_all:
+                            properties_to_sync = PROPERTY_MAPPING.items()
+                        else:
+                            properties_to_sync = [
+                                (hid, pname) for hid, pname in PROPERTY_MAPPING.items()
+                                if pname in selected_properties
+                            ]
+                        
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        total_properties = len(properties_to_sync)
+                        
+                        for idx, (hotel_id, property_name) in enumerate(properties_to_sync):
+                            status_text.text(f"Syncing {property_name}... ({idx + 1}/{total_properties})")
                             
-                            total_inserted = 0
-                            total_skipped = 0
-                            total_errors = 0
-                            property_results = {}
-                            auth_error = False
+                            inserted, skipped, errors, status = sync_property_bookings(
+                                hotel_id, property_name, from_date, to_date, existing_ids
+                            )
                             
-                            if sync_all:
-                                properties_to_sync = PROPERTY_MAPPING.items()
-                            else:
-                                properties_to_sync = [
-                                    (hid, pname) for hid, pname in PROPERTY_MAPPING.items()
-                                    if pname in selected_properties
-                                ]
+                            if status == "unauthorized":
+                                auth_error = True
+                                st.error(f"🔒 Token expired for {property_name}")
+                                break
+                            elif status == "no_token":
+                                no_token_error = True
+                                break
                             
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            total_properties = len(properties_to_sync)
+                            total_inserted += inserted
+                            total_skipped += skipped
+                            total_errors += errors
                             
-                            for idx, (hotel_id, property_name) in enumerate(properties_to_sync):
-                                status_text.text(f"Syncing {property_name}... ({idx + 1}/{total_properties})")
-                                
-                                result = sync_property_bookings(
-                                    hotel_id, property_name, from_date, to_date, existing_ids, current_token
-                                )
-                                
-                                # Unpack result - now includes auth_status
-                                if len(result) == 4:
-                                    inserted, skipped, errors, auth_status = result
-                                    if auth_status == "unauthorized":
-                                        auth_error = True
-                                        st.error(f"❌ Authorization failed for {property_name}. Token may be expired.")
-                                        break
-                                else:
-                                    inserted, skipped, errors = result
-                                
-                                total_inserted += inserted
-                                total_skipped += skipped
-                                total_errors += errors
-                                
-                                property_results[property_name] = {
-                                    "inserted": inserted,
-                                    "skipped": skipped,
-                                    "errors": errors
-                                }
-                                
-                                progress_bar.progress((idx + 1) / total_properties)
-                                time.sleep(0.5)
+                            property_results[property_name] = {
+                                "inserted": inserted,
+                                "skipped": skipped,
+                                "errors": errors
+                            }
                             
-                            progress_bar.empty()
-                            status_text.empty()
+                            progress_bar.progress((idx + 1) / total_properties)
+                            time.sleep(0.3)
+                        
+                        progress_bar.empty()
+                        status_text.empty()
+                        
+                        if auth_error:
+                            st.error("🔒 **API Token Expired**")
+                            st.warning("Click 'Refresh Token' button above to get a new token.")
+                            set_current_token(None)  # Clear expired token
+                        elif no_token_error:
+                            st.error("❌ **No Token Available**")
+                            st.warning("Please provide credentials above to get an API token.")
+                        else:
+                            st.success(f"✅ API Sync Complete!")
                             
-                            if auth_error:
-                                st.error("🔒 **API Token Expired or Invalid**")
-                                st.warning("Please check the 'Use Fresh Token' option above to get a new token.")
-                            else:
-                                st.success(f"✅ API Sync Complete!")
-                                
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("✅ Inserted", total_inserted)
-                                with col2:
-                                    st.metric("⏭️ Skipped", total_skipped)
-                                with col3:
-                                    st.metric("❌ Errors", total_errors)
-                                
-                                if property_results:
-                                    st.subheader("Details by Property")
-                                    results_df = pd.DataFrame.from_dict(property_results, orient='index')
-                                    results_df = results_df.reset_index()
-                                    results_df.columns = ["Property", "Inserted", "Skipped", "Errors"]
-                                    results_df = results_df[(results_df["Inserted"] > 0) | (results_df["Skipped"] > 0) | (results_df["Errors"] > 0)]
-                                    if not results_df.empty:
-                                        st.dataframe(results_df, use_container_width=True)
-                                
-                                if 'online_reservations' in st.session_state:
-                                    del st.session_state.online_reservations
-                                st.session_state.online_reservations = load_online_reservations_from_supabase()
-                                
-                                st.info("💡 Synced bookings will now appear in DMS and can be edited in 'Edit Online Reservations'")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("✅ Inserted", total_inserted)
+                            with col2:
+                                st.metric("⭐ Skipped", total_skipped)
+                            with col3:
+                                st.metric("❌ Errors", total_errors)
+                            
+                            if property_results:
+                                st.subheader("Details by Property")
+                                results_df = pd.DataFrame.from_dict(property_results, orient='index')
+                                results_df = results_df.reset_index()
+                                results_df.columns = ["Property", "Inserted", "Skipped", "Errors"]
+                                results_df = results_df[(results_df["Inserted"] > 0) | (results_df["Skipped"] > 0) | (results_df["Errors"] > 0)]
+                                if not results_df.empty:
+                                    st.dataframe(results_df, use_container_width=True, hide_index=True)
+                            
+                            if 'online_reservations' in st.session_state:
+                                del st.session_state.online_reservations
+                            st.session_state.online_reservations = load_online_reservations_from_supabase()
+                            
+                            st.info("💡 Synced bookings will now appear in DMS and can be edited in 'Edit Online Reservations'")
+        
+        # Info section
+        with st.expander("ℹ️ API Sync Information"):
+            st.markdown("""
+            **How Token Management Works:**
+            1. Provide your Stayflexi email and password once
+            2. System gets a fresh API token automatically
+            3. Token is stored in session (valid for current session)
+            4. If token expires during sync, you'll be prompted to refresh
+            5. No need to manually extract token from browser!
             
-            with st.expander("ℹ️ API Sync Information"):
-                st.markdown("""
-                **How It Works:**
-                1. Fetches bookings from Stayflexi API for selected date range
-                2. Transforms data to match your database schema
-                3. Skips duplicate booking IDs automatically
-                4. Inserts new bookings with status "Confirmed" or "Pending"
-                5. Bookings automatically appear in DMS
-                
-                **Default Settings:**
-                - Booking Status: Automatically set based on Stayflexi status
-                - Payment Status: Calculated automatically
-                - Submitted By: "Stayflexi API"
-                
-                **Property Mapping:**
-                """)
-                mapping_df = pd.DataFrame(
-                    list(PROPERTY_MAPPING.items()),
-                    columns=["Hotel ID", "Property Name"]
-                )
-                st.dataframe(mapping_df, use_container_width=True)
-                
-                st.success("""
-                ✅ **All Properties Configured!**
-                
-                16 properties are now mapped and ready for API sync.
-                """)
+            **How Sync Works:**
+            1. Fetches bookings from Stayflexi API for selected date range
+            2. Transforms data to match your database schema
+            3. Skips duplicate booking IDs automatically
+            4. Inserts new bookings with status "Confirmed" or "Pending"
+            5. Bookings automatically appear in DMS
+            
+            **Default Settings:**
+            - Booking Status: Automatically set based on Stayflexi status
+            - Payment Status: Calculated automatically
+            - Submitted By: "Stayflexi API"
+            
+            **Property Mapping:**
+            """)
+            mapping_df = pd.DataFrame(
+                list(PROPERTY_MAPPING.items()),
+                columns=["Hotel ID", "Property Name"]
+            )
+            st.dataframe(mapping_df, use_container_width=True, hide_index=True)
+            
+            st.success("""
+            ✅ **All 16 Properties Configured!**
+            
+            All properties are mapped and ready for API sync.
+            """)
 
     # View section
     st.markdown("---")
@@ -800,4 +823,4 @@ def show_online_reservations():
             "room_no", "room_type", "booking_status", "payment_status", "booking_amount", 
             "total_payment_made", "balance_due"
         ]
-        st.dataframe(filtered_df[display_columns], use_container_width=True)
+        st.dataframe(filtered_df[display_columns], use_container_width=True, hide_index=True)
