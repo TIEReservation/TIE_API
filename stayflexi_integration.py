@@ -1,6 +1,7 @@
 """
 StayFlexi Channel Manager API Integration Module
-Handles API connections, authentication, data fetching, and booking synchronization with Edenbeach
+Handles API connections, authentication, data fetching, and booking synchronization
+Saves data to the existing online_reservations table
 """
 
 import requests
@@ -240,48 +241,10 @@ class StayFlexiAPIClient:
             params=params
         )
         return success, response.get("data") if success else None, message
-    
-    def create_booking(self, booking_data: Dict) -> Tuple[bool, Optional[Dict], str]:
-        """Create a new booking"""
-        success, response, message = self._make_request(
-            "POST", 
-            config.STAYFLEXI_ENDPOINTS["create_booking"],
-            data=booking_data
-        )
-        return success, response.get("data") if success else None, message
-    
-    def checkin_booking(self, booking_id: str) -> Tuple[bool, Optional[Dict], str]:
-        """Check-in a booking"""
-        params = {"bookingId": booking_id}
-        success, response, message = self._make_request(
-            "GET", 
-            config.STAYFLEXI_ENDPOINTS["checkin"],
-            params=params
-        )
-        return success, response.get("data") if success else None, message
-    
-    def checkout_booking(self, booking_id: str) -> Tuple[bool, Optional[Dict], str]:
-        """Check-out a booking"""
-        params = {"bookingId": booking_id}
-        success, response, message = self._make_request(
-            "GET", 
-            config.STAYFLEXI_ENDPOINTS["checkout"],
-            params=params
-        )
-        return success, response.get("data") if success else None, message
-    
-    def cancel_booking(self, booking_id: str) -> Tuple[bool, Optional[Dict], str]:
-        """Cancel a booking"""
-        success, response, message = self._make_request(
-            "POST", 
-            config.STAYFLEXI_ENDPOINTS["cancel_booking"],
-            data={"bookingId": booking_id}
-        )
-        return success, response.get("data") if success else None, message
 
 
 class StayFlexiDataSync:
-    """Handle data synchronization between StayFlexi and Supabase"""
+    """Handle data synchronization between StayFlexi and Supabase online_reservations table"""
     
     def __init__(self, api_client: StayFlexiAPIClient, supabase_client):
         self.api_client = api_client
@@ -293,7 +256,7 @@ class StayFlexiDataSync:
         }
     
     def sync_bookings(self, start_date: str, end_date: str) -> Dict:
-        """Sync bookings from StayFlexi to Supabase"""
+        """Sync bookings from StayFlexi to Supabase online_reservations table"""
         try:
             success, bookings, message = self.api_client.fetch_bookings(start_date, end_date)
             
@@ -305,22 +268,39 @@ class StayFlexiDataSync:
                     "count": 0
                 }
             
+            # Load existing booking IDs to avoid duplicates
+            try:
+                existing_response = self.supabase.table("online_reservations").select("booking_id").execute()
+                existing_ids = {r["booking_id"] for r in existing_response.data} if existing_response.data else set()
+            except Exception as e:
+                logger.warning(f"Could not fetch existing bookings: {str(e)}")
+                existing_ids = set()
+            
             # Transform and insert bookings
             synced_count = 0
+            skipped_count = 0
+            
             for booking in bookings:
                 try:
-                    # Transform API format to Supabase format
+                    booking_id = booking.get("bookingId") or booking.get("id")
+                    
+                    # Skip if already exists
+                    if booking_id in existing_ids:
+                        skipped_count += 1
+                        continue
+                    
+                    # Transform API format to online_reservations format
                     transformed = self._transform_booking(booking)
                     
-                    # Upsert to Supabase
-                    self.supabase.table(config.STAYFLEXI_TABLES["bookings"]).upsert(
-                        transformed,
-                        on_conflict="booking_id"
-                    ).execute()
+                    # Insert to Supabase
+                    response = self.supabase.table("online_reservations").insert(transformed).execute()
                     
-                    synced_count += 1
+                    if response.data:
+                        synced_count += 1
+                        existing_ids.add(booking_id)
+                    
                 except Exception as e:
-                    logger.error(f"Error syncing booking {booking.get('id')}: {str(e)}")
+                    logger.error(f"Error syncing booking {booking.get('bookingId')}: {str(e)}")
                     self.sync_status["error_count"] += 1
             
             self.sync_status["bookings"] = True
@@ -328,8 +308,9 @@ class StayFlexiDataSync:
             
             return {
                 "success": True,
-                "message": f"Successfully synced {synced_count} bookings",
-                "count": synced_count
+                "message": f"Successfully synced {synced_count} bookings (skipped {skipped_count} duplicates)",
+                "count": synced_count,
+                "skipped": skipped_count
             }
         
         except Exception as e:
@@ -343,23 +324,57 @@ class StayFlexiDataSync:
     
     @staticmethod
     def _transform_booking(api_booking: Dict) -> Dict:
-        """Transform StayFlexi booking format to Supabase format"""
+        """Transform StayFlexi booking format to online_reservations table format"""
+        
+        # Parse pax information
+        no_of_adults = api_booking.get("numberOfAdults", api_booking.get("numAdults", 0))
+        no_of_children = api_booking.get("numberOfChildren", api_booking.get("numChildren", 0))
+        no_of_infant = 0  # StayFlexi may not have infant data
+        total_pax = no_of_adults + no_of_children + no_of_infant
+        
+        # Truncate strings to match online_reservations schema
+        def truncate(val, length=50):
+            if not val:
+                return val
+            return str(val)[:length] if len(str(val)) > length else str(val)
+        
         return {
-            "booking_id": api_booking.get("bookingId") or api_booking.get("id"),
             "property": config.PROPERTY_NAME,
-            "guest_name": api_booking.get("guestName") or api_booking.get("guest_name"),
-            "email": api_booking.get("email"),
-            "phone": api_booking.get("phone"),
-            "checkin_date": api_booking.get("checkInDate") or api_booking.get("check_in_date"),
-            "checkout_date": api_booking.get("checkOutDate") or api_booking.get("check_out_date"),
-            "room_type": api_booking.get("roomType") or api_booking.get("room_type"),
-            "number_of_guests": api_booking.get("numberOfGuests") or api_booking.get("number_of_guests"),
-            "total_price": api_booking.get("totalPrice") or api_booking.get("total_price"),
-            "status": api_booking.get("status", "confirmed"),
-            "notes": api_booking.get("notes", ""),
-            "source": "StayFlexi API",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "booking_id": truncate(api_booking.get("bookingId") or api_booking.get("id")),
+            "booking_made_on": api_booking.get("bookingDate") or api_booking.get("created_at"),
+            "guest_name": truncate(api_booking.get("guestName") or api_booking.get("guest_name")),
+            "guest_phone": truncate(api_booking.get("phone") or api_booking.get("phoneNumber")),
+            "check_in": api_booking.get("checkInDate") or api_booking.get("check_in_date"),
+            "check_out": api_booking.get("checkOutDate") or api_booking.get("check_out_date"),
+            "no_of_adults": int(no_of_adults) if no_of_adults else 0,
+            "no_of_children": int(no_of_children) if no_of_children else 0,
+            "no_of_infant": int(no_of_infant),
+            "total_pax": total_pax,
+            "room_no": truncate(api_booking.get("roomNumber") or api_booking.get("room_no")),
+            "room_type": truncate(api_booking.get("roomType") or api_booking.get("room_type")),
+            "rate_plans": truncate(api_booking.get("ratePlanName") or api_booking.get("rate_plans")),
+            "booking_source": "StayFlexi",
+            "segment": truncate(api_booking.get("segment", "Online")),
+            "staflexi_status": truncate(api_booking.get("status", "confirmed")),
+            "booking_confirmed_on": api_booking.get("confirmationDate"),
+            "booking_amount": float(api_booking.get("totalPrice") or api_booking.get("total_price") or 0),
+            "total_payment_made": float(api_booking.get("paidAmount") or 0),
+            "balance_due": float(api_booking.get("pendingAmount") or 0),
+            "mode_of_booking": "StayFlexi",
+            "booking_status": "Pending",
+            "payment_status": _compute_payment_status(
+                float(api_booking.get("totalPrice") or 0),
+                float(api_booking.get("paidAmount") or 0)
+            ),
+            "remarks": truncate(api_booking.get("specialRequests") or api_booking.get("notes"), 500),
+            "submitted_by": "StayFlexi Sync",
+            "modified_by": "StayFlexi Sync",
+            "total_amount_with_services": float(api_booking.get("totalPrice") or 0),
+            "ota_gross_amount": 0.0,
+            "ota_commission": 0.0,
+            "ota_tax": 0.0,
+            "ota_net_amount": 0.0,
+            "room_revenue": float(api_booking.get("totalPrice") or 0)
         }
     
     def get_sync_status(self) -> Dict:
@@ -369,3 +384,15 @@ class StayFlexiDataSync:
             "last_sync_formatted": self.sync_status["last_sync"].strftime("%Y-%m-%d %H:%M:%S") 
                                    if self.sync_status["last_sync"] else "Never"
         }
+
+
+def _compute_payment_status(total_amount: float, paid_amount: float) -> str:
+    """Compute payment status based on amounts"""
+    if total_amount <= 0:
+        return "Not Paid"
+    if paid_amount >= total_amount:
+        return "Fully Paid"
+    elif paid_amount > 0:
+        return "Partially Paid"
+    else:
+        return "Not Paid"
