@@ -24,7 +24,6 @@ from log import show_log_report, log_activity
 from users import validate_user, create_user, update_user, delete_user, load_users
 from accounts_report import show_accounts_report
 from nrd_report import show_nrd_report
-from expense_tracker import display_expense_tracker  # ✅ ADDED
 # Try to import target achievement module
 try:
     from target_achievement_report import show_target_achievement_report
@@ -48,7 +47,7 @@ def get_supabase_client():
     """Create a single Supabase client for the entire session."""
     try:
         os.environ["SUPABASE_URL"] = "https://oxbrezracnmazucnnqox.supabase.co"
-        os.environ["SUPABASE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94YnJlenJhY25tYXp1Y25ucW94Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NjUxMTgsImV4cCI6MjA2OTM0MzExMTh9.nqBK2ZxntesLY9qYClpoFPVnXOW10KrzF-UI_DKjbKo"
+        os.environ["SUPABASE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94YnJlenJhY25tYXp1Y25ucW94Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NjUxMTgsImV4cCI6MjA2OTM0MTExOH0.nqBK2ZxntesLY9qYClpoFPVnXOW10KrzF-UI_DKjbKo"
         return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
     except Exception as e:
         st.error(f"Failed to initialize Supabase client: {e}")
@@ -135,7 +134,7 @@ def check_authentication():
             # Admin from database
             valid_screens = st.session_state.user_data.get("screens", ["User Management", "Log Report"])
         else:
-            valid_screens = ["Inventory Dashboard",  "Booking Date Report", "Direct Reservations", "Night Report Dashboard", "View Reservations", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Daily Status", "Daily Management Status", "Analytics", "Monthly Consolidation", "Summary Report", "Target Achievement", "Accounts Report", "User Management", "Log Report", "Date-wise Booking Report", "Date-wise Check-in Report", "Expense Tracker"]
+            valid_screens = ["Inventory Dashboard",  "Booking Date Report", "Direct Reservations", "Night Report Dashboard", "View Reservations", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Daily Status", "Daily Management Status", "Analytics", "Monthly Consolidation", "Summary Report", "Target Achievement"]
        
         # Apply screen filtering for users with configured screens
         if st.session_state.user_data:
@@ -200,20 +199,12 @@ def show_user_management():
             "Le Poshe Beachview", "La Millionaire Resort", "Le Poshe Luxury", "Le Poshe Suite",
             "La Paradise Residency", "La Paradise Luxury", "La Villa Heritage", "Le Pondy Beach Side",
             "Le Royce Villa", "La Tamara Luxury", "La Antilia Luxury", "Date-wise Check-in Report", "La Tamara Suite",
-            "Le Park Resort", "Villa Shakti", "Eden Beach Resort", "La Coromandel Luxury"
+            "Le Park Resort", "Villa Shakti", "Eden Beach Resort", "La Coromandel Luxury",
+            "Le Terra", "Happymates Forest Retreat"
         ]
         new_properties = st.multiselect("Visible Properties", all_properties, default=all_properties, key="create_properties")
        
-        # ✅ UPDATED: Added "Expense Tracker" to Create User all_screens
-        all_screens = [
-            "Inventory Dashboard", "Night Report Dashboard", "Accounts Report",
-            "Date-wise Booking Report", "Date-wise Check-in Report", "Booking Date Report",
-            "Direct Reservations", "View Reservations", "Edit Direct Reservation",
-            "Online Reservations", "Edit Online Reservations", "Daily Status",
-            "Daily Management Status", "Analytics", "Monthly Consolidation",
-            "Summary Report", "Target Achievement", "User Management", "Log Report",
-            "Expense Tracker"  # ✅ ADDED
-        ]
+        all_screens = ["Inventory Dashboard", "Night Report Dashboard", "Accounts Report", "Date-wise Booking Report", "Date-wise Check-in Report", "Booking Date Report","Direct Reservations", "View Reservations", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Daily Status", "Daily Management Status", "Analytics", "Monthly Consolidation", "Summary Report", "Target Achievement", "User Management", "Log Report"]
        
         # Default screens based on role
         if new_role == "Admin":
@@ -221,11 +212,11 @@ def show_user_management():
         elif new_role == "Management":
             default_screens = [s for s in all_screens if s not in ["User Management", "Log Report"]]
         elif new_role == "ReservationHead":
-            default_screens = ["Direct Reservations", "Night Report Dashboard", "View Reservations", "Date-wise Booking Report", "Date-wise Check-in Report", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Analytics"]
+            default_screens = ["Direct Reservations", "Night Report Dashboard", "View Reservations", "Date-wise Booking Report", "Date-wise Check-in Report", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Daily Status", "Monthly Consolidation", "Summary Report", "Target Achievement"]
         elif new_role == "Accounts Team":
             default_screens = ["Daily Status", "Night Report Dashboard", "Monthly Consolidation", "Accounts Report"]
         else:
-            default_screens = [s for s in all_screens if s not in ["Daily Management Status", "Night Report Dashboard", "Date-wise Booking Report","Date-wise Check-in Report", "Analytics", "Inventory Dashboard", "User Management", "Log Report", "Target Achievement", "Monthly Consolidation"]]
+            default_screens = [s for s in all_screens if s not in ["Daily Management Status", "Night Report Dashboard", "Date-wise Booking Report","Date-wise Check-in Report", "Analytics", "Inventory Dashboard", "Summary Report", "Target Achievement", "User Management", "Log Report"]]
        
         new_screens = st.multiselect("Visible Screens", all_screens, default=default_screens, key="create_screens")
        
@@ -317,23 +308,15 @@ def show_user_management():
                             "Le Poshe Beachview", "La Millionaire Resort", "Le Poshe Luxury", "Le Poshe Suite",
                             "La Paradise Residency", "La Paradise Luxury", "La Villa Heritage", "Le Pondy Beach Side",
                             "Le Royce Villa", "La Tamara Luxury", "La Antilia Luxury", "La Tamara Suite",
-                            "Le Park Resort", "Villa Shakti", "Eden Beach Resort", "La Coromandel Luxury"
+                            "Le Park Resort", "Villa Shakti", "Eden Beach Resort", "La Coromandel Luxury",
+                            "Le Terra", "Happymates Forest Retreat"
                         ]
                         default_properties = [prop for prop in current_properties if prop in all_properties]
                         if not default_properties:
                             default_properties = all_properties
                         mod_properties = st.multiselect("Visible Properties", all_properties, default=default_properties, key="modify_properties")
                        
-                        # ✅ UPDATED: Added "Expense Tracker" to Modify User all_screens
-                        all_screens = [
-                            "Inventory Dashboard", "Booking Date Report", "Date-wise Booking Report",
-                            "Date-wise Check-in Report", "Accounts Report", "Direct Reservations",
-                            "Night Report Dashboard", "View Reservations", "Edit Direct Reservation",
-                            "Online Reservations", "Edit Online Reservations", "Daily Status",
-                            "Daily Management Status", "Analytics", "Monthly Consolidation",
-                            "Summary Report", "Target Achievement", "User Management", "Log Report",
-                            "Expense Tracker"  # ✅ ADDED
-                        ]
+                        all_screens = ["Inventory Dashboard", "Booking Date Report", "Date-wise Booking Report", "Date-wise Check-in Report", "Accounts Report", "Direct Reservations", "Night Report Dashboard", "View Reservations", "Edit Direct Reservation", "Online Reservations", "Edit Online Reservations", "Daily Status", "Daily Management Status", "Analytics", "Monthly Consolidation", "Summary Report", "Target Achievement", "User Management", "Log Report"]
                         # Filter out any screens that don't exist in all_screens to avoid the error
                         valid_current_screens = [screen for screen in current_screens if screen in all_screens]
                         mod_screens = st.multiselect("Visible Screens", all_screens, default=valid_current_screens, key="modify_screens")
@@ -471,22 +454,16 @@ def main():
     elif page == "Accounts Report":
         show_accounts_report()
         log_activity(supabase, st.session_state.username, "Accessed Accounts Report")
-    elif page == "Expense Tracker":  # ✅ ADDED
-        if st.session_state.role in ["Management", "Accounts Team"]:
-            display_expense_tracker()
-            log_activity(supabase, st.session_state.username, "Accessed Expense Tracker")
-        else:
-            st.error("Access Denied: You do not have permission to view Expense Tracker.")
     elif page == "Night Report Dashboard":
         show_nrd_report()
         log_activity(supabase, st.session_state.username, "Accessed Night Report Dashboard")
     elif page == "Booking Date Report":
         show_booking_date_report()
         log_activity(supabase, st.session_state.username, "Accessed Booking Date Report")
-    elif page == "Date-wise Booking Report":
+    elif page == "Date-wise Booking Report":  # ADD THIS BLOCK
         show_datewise_booking_report()
         log_activity(supabase, st.session_state.username, "Accessed Date-wise Booking Report")
-    elif page == "Date-wise Check-in Report":
+    elif page == "Date-wise Check-in Report":  # ADD THIS BLOCK
         show_checkin_date_report()
         log_activity(supabase, st.session_state.username, "Accessed Date-wise Check-in Report")
     
