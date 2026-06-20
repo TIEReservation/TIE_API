@@ -15,15 +15,17 @@ except KeyError as e:
     st.stop()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 # Eden Beach API – credentials come ONLY from .streamlit/secrets.toml
 # Add this block to your secrets file:
 #
 #   [eden_beach]
-#   api_url = "https://api.edenbeach.com"
-#   api_key  = "your-api-key-here"
+#   api_url = "https://api.stayflexi.com"
+#   api_key = "your-x-sf-api-key-here"
+#   pms_id = "20057"
+#   hotel_id = "30357"
 #
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 
 def _get_eden_beach_client():
     """
@@ -32,11 +34,13 @@ def _get_eden_beach_client():
     """
     try:
         api_url = st.secrets["eden_beach"]["api_url"]
-        api_key  = st.secrets["eden_beach"]["api_key"]
+        api_key = st.secrets["eden_beach"]["api_key"]
+        pms_id = st.secrets["eden_beach"]["pms_id"]
+        hotel_id = st.secrets["eden_beach"]["hotel_id"]
     except KeyError:
         return None, (
             "Eden Beach API credentials not found. "
-            "Add [eden_beach] with api_url and api_key to "
+            "Add [eden_beach] with api_url, api_key, pms_id, hotel_id to "
             ".streamlit/secrets.toml (local) or Streamlit Cloud Secrets (production)."
         )
 
@@ -44,15 +48,17 @@ def _get_eden_beach_client():
     try:
         cfg.set_api_url(api_url)
         cfg.set_api_key(api_key)
+        cfg.set_pms_id(pms_id)
+        cfg.set_hotel_id(hotel_id)
     except ValueError as e:
         return None, str(e)
 
     return EdenBeachAPIClient(cfg), None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 
 def parse_date(dt_str):
     """Parse date string with or without time."""
@@ -231,9 +237,9 @@ def process_and_sync_excel(uploaded_file):
         return 0, 0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 # Eden Beach API sync logic
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 
 def sync_eden_beach_bookings_to_online_reservations(start_date=None, end_date=None):
     """
@@ -341,9 +347,9 @@ def sync_eden_beach_bookings_to_online_reservations(start_date=None, end_date=No
     return inserted, updated, errors, None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 # Eden Beach sync UI block
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 
 def show_eden_beach_sync_section():
     """Render the Eden Beach API sync card inside the Online Reservations page."""
@@ -354,6 +360,8 @@ def show_eden_beach_sync_section():
         "eden_beach" in st.secrets
         and st.secrets["eden_beach"].get("api_url")
         and st.secrets["eden_beach"].get("api_key")
+        and st.secrets["eden_beach"].get("pms_id")
+        and st.secrets["eden_beach"].get("hotel_id")
     )
     if not eb_secrets_ok:
         st.warning(
@@ -362,8 +370,10 @@ def show_eden_beach_sync_section():
             "**Streamlit Cloud → App Settings → Secrets** (production):\n\n"
             "```toml\n"
             "[eden_beach]\n"
-            "api_url = \"https://api.edenbeach.com\"\n"
-            "api_key  = \"your-api-key-here\"\n"
+            "api_url = \"https://api.stayflexi.com\"\n"
+            "api_key = \"your-x-sf-api-key-here\"\n"
+            "pms_id = \"20057\"\n"
+            "hotel_id = \"30357\"\n"
             "```"
         )
         st.divider()
@@ -412,9 +422,9 @@ def show_eden_beach_sync_section():
     st.divider()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 # Main page
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────[...]
 
 def show_online_reservations():
     """Display online reservations page with upload and view."""
