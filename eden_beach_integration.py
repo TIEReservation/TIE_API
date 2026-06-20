@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import json
 import logging
 from functools import wraps
+from urllib.parse import urlparse, urlunparse, urljoin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,8 @@ class EdenBeachAPIConfig:
     def __init__(self):
         self.api_base_url = None
         self.api_key = None
+        self.pms_id = None
+        self.hotel_id = None
         self.property_id = "EDEN_BEACH_RESORT"
         self.timeout = 30
         self.max_retries = 3
@@ -43,9 +46,23 @@ class EdenBeachAPIConfig:
         self.api_base_url = url.rstrip("/")
         return True
     
+    def set_pms_id(self, pms_id: str):
+        """Set PMS identifier"""
+        if not pms_id or len(str(pms_id).strip()) == 0:
+            raise ValueError("PMS ID cannot be empty")
+        self.pms_id = str(pms_id).strip()
+        return True
+    
+    def set_hotel_id(self, hotel_id: str):
+        """Set hotel identifier"""
+        if not hotel_id or len(str(hotel_id).strip()) == 0:
+            raise ValueError("Hotel ID cannot be empty")
+        self.hotel_id = str(hotel_id).strip()
+        return True
+    
     def is_configured(self) -> bool:
         """Check if API is properly configured"""
-        return self.api_base_url is not None and self.api_key is not None
+        return all([self.api_base_url, self.api_key, self.pms_id, self.hotel_id])
     
     def get_headers(self) -> Dict[str, str]:
         """Get request headers with authentication"""
@@ -59,12 +76,39 @@ class EdenBeachAPIConfig:
 
 class EdenBeachAPIClient:
     """Client for Eden Beach Resort API interactions"""
+    STAYFLEXI_SERVICE_PATH = "/core/apiv1/cmservice"
     
     def __init__(self, config: EdenBeachAPIConfig):
         self.config = config
         self.session = requests.Session()
         self.last_error = None
         self.last_sync_time = None
+    
+    @classmethod
+    def _build_stayflexi_base_url(cls, configured_url: str) -> str:
+        """
+        Normalize configured URL to StayFlexi CM service base URL.
+        Handles both host-only and already-suffixed URLs safely.
+        """
+        parsed = urlparse(configured_url.strip())
+        path = (parsed.path or "").rstrip("/")
+        normalized_path = path.lower()
+        service_path = cls.STAYFLEXI_SERVICE_PATH
+        service_path_lower = service_path.lower()
+        
+        if service_path_lower in normalized_path:
+            idx = normalized_path.index(service_path_lower) + len(service_path_lower)
+            final_path = path[:idx]
+        else:
+            final_path = service_path
+        
+        return urlunparse((parsed.scheme, parsed.netloc, final_path, "", "", ""))
+    
+    @classmethod
+    def _build_request_url(cls, configured_url: str, endpoint: str) -> str:
+        base_url = cls._build_stayflexi_base_url(configured_url).rstrip("/") + "/"
+        endpoint_path = endpoint.lstrip("/")
+        return urljoin(base_url, endpoint_path)
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, 
                      params: Optional[Dict] = None) -> Tuple[bool, Optional[Dict], str]:
@@ -77,8 +121,12 @@ class EdenBeachAPIClient:
         if not self.config.is_configured():
             return False, None, "API not configured. Please set API key and URL."
         
-        url = f"{self.config.api_base_url}{endpoint}"
+        url = self._build_request_url(self.config.api_base_url, endpoint)
         headers = self.config.get_headers()
+        
+        request_params = dict(params or {})
+        request_params["pmsId"] = self.config.pms_id
+        request_params["hotelId"] = self.config.hotel_id
         
         for attempt in range(self.config.max_retries):
             try:
@@ -86,7 +134,7 @@ class EdenBeachAPIClient:
                     response = self.session.get(
                         url, 
                         headers=headers, 
-                        params=params,
+                        params=request_params,
                         timeout=self.config.timeout
                     )
                 elif method.upper() == "POST":
@@ -94,7 +142,7 @@ class EdenBeachAPIClient:
                         url, 
                         headers=headers, 
                         json=data,
-                        params=params,
+                        params=request_params,
                         timeout=self.config.timeout
                     )
                 elif method.upper() == "PUT":
@@ -102,7 +150,7 @@ class EdenBeachAPIClient:
                         url, 
                         headers=headers, 
                         json=data,
-                        params=params,
+                        params=request_params,
                         timeout=self.config.timeout
                     )
                 else:
@@ -110,22 +158,24 @@ class EdenBeachAPIClient:
                 
                 # Handle response
                 if response.status_code == 401:
-                    return False, None, "Authentication failed. Check your API key."
+                    return False, None, f"Authentication failed [{method.upper()} {url}] (status=401)"
                 elif response.status_code == 403:
-                    return False, None, "Access forbidden. Check your permissions."
+                    return False, None, f"Access forbidden [{method.upper()} {url}] (status=403)"
                 elif response.status_code == 404:
-                    return False, None, "Endpoint not found."
+                    body_preview = response.text[:300]
+                    return False, None, f"Endpoint not found [{method.upper()} {url}] (status=404, body={body_preview})"
                 elif response.status_code >= 500:
                     if attempt < self.config.max_retries - 1:
-                        logger.warning(f"Server error (attempt {attempt + 1}): {response.status_code}")
+                        logger.warning(f"Server error (attempt {attempt + 1}) {method.upper()} {url}: {response.status_code}")
                         continue
-                    return False, None, "Server error. Please try again later."
+                    body_preview = response.text[:300]
+                    return False, None, f"Server error [{method.upper()} {url}] (status={response.status_code}, body={body_preview})"
                 elif response.status_code >= 400:
                     try:
                         error_msg = response.json().get("message", response.text)
                     except:
                         error_msg = response.text
-                    return False, None, f"Request failed: {error_msg}"
+                    return False, None, f"Request failed [{method.upper()} {url}] (status={response.status_code}): {error_msg}"
                 
                 # Success
                 if response.status_code == 204:  # No content
@@ -138,23 +188,23 @@ class EdenBeachAPIClient:
                     
             except requests.Timeout:
                 if attempt < self.config.max_retries - 1:
-                    logger.warning(f"Timeout (attempt {attempt + 1}/{self.config.max_retries})")
+                    logger.warning(f"Timeout (attempt {attempt + 1}/{self.config.max_retries}) {method.upper()} {url}")
                     continue
-                return False, None, "Request timeout. Server may be unavailable."
+                return False, None, f"Request timeout [{method.upper()} {url}]. Server may be unavailable."
             except requests.ConnectionError as e:
                 if attempt < self.config.max_retries - 1:
-                    logger.warning(f"Connection error (attempt {attempt + 1}): {str(e)}")
+                    logger.warning(f"Connection error (attempt {attempt + 1}) {method.upper()} {url}: {str(e)}")
                     continue
-                return False, None, f"Connection error: {str(e)}"
+                return False, None, f"Connection error [{method.upper()} {url}]: {str(e)}"
             except Exception as e:
-                logger.error(f"Unexpected error: {str(e)}")
-                return False, None, f"Unexpected error: {str(e)}"
+                logger.error(f"Unexpected error {method.upper()} {url}: {str(e)}")
+                return False, None, f"Unexpected error [{method.upper()} {url}]: {str(e)}"
         
         return False, None, "Failed after multiple retry attempts"
     
     def test_connection(self) -> Tuple[bool, str]:
         """Test API connection and authentication"""
-        success, response, message = self._make_request("GET", "/api/health")
+        success, response, message = self._make_request("GET", "/reservation/navigationGetRoomBookings")
         if success:
             return True, "✅ Connection successful!"
         else:
@@ -175,14 +225,21 @@ class EdenBeachAPIClient:
         """
         params = {}
         if start_date:
-            params["start_date"] = start_date
+            params["checkInFrom"] = start_date
         if end_date:
-            params["end_date"] = end_date
+            params["checkInTo"] = end_date
         
-        success, response, message = self._make_request("GET", "/api/bookings", params=params)
+        success, response, message = self._make_request("GET", "/reservation/navigationGetRoomBookings", params=params)
         
         if success and response:
-            bookings = response.get("bookings", [])
+            bookings = []
+            if isinstance(response, list):
+                bookings = response
+            elif isinstance(response, dict):
+                for key in ["reservations", "bookings", "data", "rooms"]:
+                    if key in response and isinstance(response[key], list):
+                        bookings = response[key]
+                        break
             self.last_sync_time = datetime.now()
             logger.info(f"Fetched {len(bookings)} bookings")
             return True, bookings, f"Successfully fetched {len(bookings)} bookings"
