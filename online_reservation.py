@@ -4,6 +4,7 @@ from datetime import datetime
 import re
 from supabase import create_client, Client
 from utils import safe_int, safe_float, get_property_name
+from stayflexi_sync_ui import show_stayflexi_quick_sync_button
 
 # Initialize Supabase client
 try:
@@ -212,8 +213,13 @@ def show_online_reservations():
     if 'online_reservations' not in st.session_state:
         st.session_state.online_reservations = load_online_reservations_from_supabase()
 
-    # Upload and Sync section
-    st.subheader("Upload and Sync Excel File")
+    # ✅ STAYFLEXI SYNC SECTION (NEW)
+    st.subheader("🔄 Sync from Stayflexi (Eden Beach Resort)")
+    show_stayflexi_quick_sync_button(supabase)
+    st.markdown("---")
+
+    # Upload and Sync section (EXISTING)
+    st.subheader("📤 Upload and Sync Excel File")
     uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
     if uploaded_file is not None:
         if st.button("🔄 Sync to Database"):
@@ -223,7 +229,7 @@ def show_online_reservations():
                 # Reload to reflect changes
                 st.session_state.online_reservations = load_online_reservations_from_supabase()
 
-     # View section
+    # View section
     st.subheader("View Online Reservations")
     if not st.session_state.online_reservations:
         st.info("No online reservations available.")
