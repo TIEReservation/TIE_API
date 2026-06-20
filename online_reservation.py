@@ -20,7 +20,7 @@ except KeyError as e:
 # Add this block to your secrets file:
 #
 #   [eden_beach]
-#   api_url = "https://api.stayflexi.com"
+#   api_url = "https://api.stayflexi.com"  # host-only OR full .../core/apiv1/cmservice
 #   api_key = "your-x-sf-api-key-here"
 #   pms_id = "20057"
 #   hotel_id = "30357"
@@ -32,15 +32,27 @@ def _get_eden_beach_client():
     Build a configured EdenBeachAPIClient strictly from Streamlit secrets.
     Returns (client, error_message).  error_message is None on success.
     """
+    secret_block = None
+    if "eden_beach" in st.secrets:
+        secret_block = "eden_beach"
+    elif "stayflexi" in st.secrets:
+        secret_block = "stayflexi"
+
+    if not secret_block:
+        return None, (
+            "API credentials not found. Add [eden_beach] (preferred) or [stayflexi] "
+            "with api_url, api_key, pms_id, hotel_id."
+        )
+
     try:
-        api_url = st.secrets["eden_beach"]["api_url"]
-        api_key = st.secrets["eden_beach"]["api_key"]
-        pms_id = st.secrets["eden_beach"]["pms_id"]
-        hotel_id = st.secrets["eden_beach"]["hotel_id"]
+        api_url = st.secrets[secret_block]["api_url"]
+        api_key = st.secrets[secret_block]["api_key"]
+        pms_id = st.secrets[secret_block]["pms_id"]
+        hotel_id = st.secrets[secret_block]["hotel_id"]
     except KeyError:
         return None, (
-            "Eden Beach API credentials not found. "
-            "Add [eden_beach] with api_url, api_key, pms_id, hotel_id to "
+            f"Missing keys in [{secret_block}] credentials. "
+            "Required: api_url, api_key, pms_id, hotel_id. Add them to "
             ".streamlit/secrets.toml (local) or Streamlit Cloud Secrets (production)."
         )
 
@@ -357,20 +369,17 @@ def show_eden_beach_sync_section():
 
     # Guard: show a clear message if secrets are not set yet
     eb_secrets_ok = (
-        "eden_beach" in st.secrets
-        and st.secrets["eden_beach"].get("api_url")
-        and st.secrets["eden_beach"].get("api_key")
-        and st.secrets["eden_beach"].get("pms_id")
-        and st.secrets["eden_beach"].get("hotel_id")
+        ("eden_beach" in st.secrets and st.secrets["eden_beach"].get("api_url") and st.secrets["eden_beach"].get("api_key") and st.secrets["eden_beach"].get("pms_id") and st.secrets["eden_beach"].get("hotel_id"))
+        or ("stayflexi" in st.secrets and st.secrets["stayflexi"].get("api_url") and st.secrets["stayflexi"].get("api_key") and st.secrets["stayflexi"].get("pms_id") and st.secrets["stayflexi"].get("hotel_id"))
     )
     if not eb_secrets_ok:
         st.warning(
             "🔐 Eden Beach API credentials not configured.  \n"
-            "Add the following to **`.streamlit/secrets.toml`** (local) or  \n"
+            "Add either `[eden_beach]` (preferred) or `[stayflexi]` with the following keys to **`.streamlit/secrets.toml`** (local) or  \n"
             "**Streamlit Cloud → App Settings → Secrets** (production):\n\n"
             "```toml\n"
             "[eden_beach]\n"
-            "api_url = \"https://api.stayflexi.com\"\n"
+            "api_url = \"https://api.stayflexi.com\"  # or .../core/apiv1/cmservice\n"
             "api_key = \"your-x-sf-api-key-here\"\n"
             "pms_id = \"20057\"\n"
             "hotel_id = \"30357\"\n"
